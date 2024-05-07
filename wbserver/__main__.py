@@ -27,9 +27,19 @@ def gen_room_code(min_length=4):
         code += ROOMCODE_CHARS[random.randint(0, lastchar)]
     return code
 
+def print_all(text, type=MSG_SYSINFO):
+    msgdict = {
+        "timestamp": 0,
+        "variant": type,
+        "content": text
+    }
+
+    sio.emit("msg_broadcast", data=msgdict);
+
 @sio.event
 def connect(sid, environ, auth):
     print('> connect: ', sid, " auth: ", auth)
+    print_all(f"joining: {sid}", MSG_USERJOIN);
 
 @sio.event
 def ping(sid):
@@ -50,7 +60,19 @@ def draw_line(sid, data):
     sio.emit("draw_line", data=data, skip_sid=sid)
 
 @sio.event
+def msg_send(sid, data):
+    print(sid, data)
+    msgdict = {
+        "timestamp": 0,
+        "variant": MSG_USERMSG,
+        "user": sid,
+        "content": data
+    }
+    sio.emit("msg_broadcast", msgdict)
+
+@sio.event
 def disconnect(sid):
+    print_all(f"leaving: {sid}", MSG_USERLEAVE);
     print(f'> disconnect: (socket: {sid})')
 
 if __name__ == '__main__':
