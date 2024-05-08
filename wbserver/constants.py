@@ -2,6 +2,8 @@ ROOMCODE_CHARS = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M
 ROOMCODE_LOOP_MAX = 10
 ROOMCODE_FAILSAFE = 0
 
+CMDPREFIX = "/"
+
 # ChatMsgVariant
 MSG_SYSINFO = 0
 MSG_SYSWARNING = 1

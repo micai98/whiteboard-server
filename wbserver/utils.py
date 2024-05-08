@@ -1,3 +1,8 @@
+import time
+
+def timenow():
+	return int(time.time())
+
 def hgs(hsize:int=1, text:str="", repeat:int=1):
 	for i in range(0, repeat): print("░▒▓" + ((text[:hsize] + " " * (hsize - len(text))) if text != "" else "█"*hsize) + "▓▒░")
 
