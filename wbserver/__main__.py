@@ -66,12 +66,13 @@ def process_command(sid:str, text:str):
         return 0
     
     if(cmd == "say"):
-        if len(args) > 0: 
+        content = " ".join(args)
+        if len(content) > 0: 
             msg = {
                 "timestamp": timenow(),
                 "variant": MSG_USERMSG,
                 "user": sid,
-                "content": " ".join(args)
+                "content": content
             }
             sio.emit("msg_broadcast", msg)
         else:
@@ -88,7 +89,7 @@ def process_command(sid:str, text:str):
         return 0
     
     # all commands should return a value, if the code reached this point that means the user entered an invalid command
-    chat_print("Unknown command", to=sid)
+    chat_print(f"Unknown command \"{cmd}\"", to=sid)
 
     return -1
         
@@ -127,7 +128,7 @@ def canvas_state(sid, data):
 # drawing
 @sio.event
 def draw_line(sid, data):
-    print(sid, data)
+    #print(sid, data)
     sio.emit("draw_line", data=data, skip_sid=sid)
 
 # process user commands (this includes chat messages, since that's technically a command as well)
