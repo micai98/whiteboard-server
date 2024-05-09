@@ -6,7 +6,7 @@ whiteboard websocket server
 """
 
 __author__ = "micai"
-__version__ = "0.1.1"
+__version__ = "0.2"
 
 import random
 import time
@@ -28,11 +28,11 @@ app = socketio.WSGIApp(sio, static_files={
 })
 
 userdict = {}
-roomdict = {}
-codedict = {}
+roomdict = {
+    'DUMMY': Room('nobody')
+}
 
 usercount = 0
-clearvotes = 0
 
 # generates a random unique room code
 def gen_room_code(min_length:int=4):
@@ -54,12 +54,62 @@ def chat_print(text:str, to="" , type:int=MSG_SYSINFO):
 
     sio.emit("msg_broadcast", data=msg, to=to)
 
+def get_user_name(sid:str):
+    return userdict[sid].name
+
+def get_user_roomcode(sid:str):
+    return userdict[sid].room
+
+def room_create(host:str):
+    code = gen_room_code()
+    roomdict[code] = Room(host=host)
+    print(f" + ROOM CREATED: {code} by {host}")
+    return code
+
+def room_delete(roomcode:str):
+    print(f" + ROOM DELETED: {roomcode}")
+    if roomcode in roomdict:
+        roomdict.pop(roomcode)
+    sio.close_room(roomcode)
+
+def room_user_add(roomcode:str, sid:str):
+    room:Room = roomdict[roomcode]
+    room.users.append(sid)
+    sio.enter_room(sid, roomcode)
+
+    user:User = userdict[sid]
+    if user.room in roomdict:
+        room_user_remove(user.room, sid)
+    user.room = roomcode
+
+def room_user_remove(roomcode:str, sid:str):
+    room:Room = roomdict[roomcode]
+    if sid in room.users:
+        room.users.remove(sid)
+    if sid in room.clearvotes:
+        room.clearvotes.remove(sid)
+    
+    user:User = userdict[sid]
+    user.room = ''
+    
+    # as of now, there's no point keeping empty rooms around, so they will be automatically deleted once the last user leaves
+    if len(room.users) == 0:
+        room_delete(roomcode)
+
 # processes string as a chat command, returns -1 if command doesn't exist. the prefix should be removed before being passed to this function
 def process_command(sid:str, text:str):
     """processes string as a chat command, returns -1 if command doesn't exist. the prefix should be removed before being passed to this function"""
     args = text.split(" ")
     cmd = args.pop(0)
-    global clearvotes, usercount
+    user:User = userdict[sid]
+
+    if not user:
+        print(f" > INVALID USER ISSUED A COMMAND: {sid} {text}")
+        return
+    
+    if not user.room in roomdict:
+        print(f" > USER IN INVALID ROOM ISSUED A COMMAND: {sid} {text}")
+        return
 
     if cmd == "info":
         chat_print(f"Server version: {__version__} | Users online: {usercount}", to=sid)
@@ -71,21 +121,43 @@ def process_command(sid:str, text:str):
             msg = {
                 "timestamp": timenow(),
                 "variant": MSG_USERMSG,
-                "user": userdict[sid].name,
+                "user": user.name,
                 "content": content
             }
-            sio.emit("msg_broadcast", msg)
+            sio.emit("msg_broadcast", msg, to=user.room)
         else:
             print(f"> ignoring empty message attempt ({sid})")
         return 0
     
+    if cmd == "list":
+        room:Room = roomdict[user.room]
+        i:int = 0
+        chat_print(f"Users in room {user.room}:", to=sid)
+        for uid in room.users:
+            chat_print(f"{i} - {get_user_name(uid)}", to=sid)
+            i += 1
+
+        return 0
+
     if cmd == "clear":
-        clearvotes += 1
-        chat_print(f"{userdict[sid].name} voted to clear the canvas ({clearvotes}/{usercount})")
-        if clearvotes >= usercount:
-            clearvotes = 0
-            chat_print("Cleared the canvas")
-            sio.emit("canvas_clear")
+        room:Room = roomdict[user.room]
+
+        votes = len(room.clearvotes)
+        users = len(room.users)
+
+        if sid in room.clearvotes:
+            room.clearvotes.remove(sid)
+            chat_print(f"{user.name} cancelled vote to clear canvas")
+        else:
+            votes += 1
+            room.clearvotes.append(sid)
+            chat_print(f"{user.name} wants to clear the canvas ({votes}/{users})")
+        
+            if votes >= users:
+                room.clearvotes.clear()
+                chat_print("Cleared the canvas")
+                sio.emit("canvas_clear", to=user.room)
+
         return 0
     
     # all commands should return a value, if the code reached this point that means the user entered an invalid command
@@ -107,7 +179,7 @@ def validate_user(sid, auth):
 def connect(sid, environ, auth):
     global usercount, clearvotes
     usercount += 1
-    print('> connect: ', sid, " auth: ", auth)
+    print(' > connect: ', sid, " auth: ", auth)
 
     if validate_user(sid, auth):
         userdict[sid] = User(auth['user_name'])
@@ -118,9 +190,10 @@ def connect(sid, environ, auth):
         }
         
         sio.emit("connect_response", to=sid, data=response)
-        chat_print(f'joining: {userdict[sid].name}', type=MSG_USERJOIN)
+        print("  user is valid")
 
     else:
+        print("  validation failed")
         response = {
             "accepted": False,
             "message": "Validation failed",
@@ -135,38 +208,79 @@ def disconnect(sid):
     global usercount, clearvotes
     usercount -= 1
     clearvotes = 0
-    print(f'> disconnect: (socket: {sid})')
+    print(f' > disconnect: (socket: {sid})')
 
     if sid in userdict:
-        print('removing associated userdict entry')
+        roomcode:str = get_user_roomcode(sid)
+        if roomcode in roomdict:
+            print('  removing user from room')
+            chat_print(f"leaving: {userdict[sid].name}", type=MSG_USERLEAVE, to=roomcode)
+            room_user_remove(roomcode, sid)
+
+        print('   removing associated userdict entry')
+        
         userdict.pop(sid)
-        chat_print(f"leaving: {userdict[sid].name}", type=MSG_USERLEAVE)
     else:
-        print('user had no userdict entry')
+        print('   user had no userdict entry')
 
 # test event
 @sio.event
 def ping(sid):
     print(f'pong! {sid}')
 
-# sent by clients when they're ready to have the canvas sent to them
+# sent by clients when they're ready to join a room or create one
 @sio.event
-def client_ready(sid):
-    print(f"client ready: {sid}")
-    sio.emit("canvas_request_state", skip_sid=sid)
+def client_join(sid, data):
+    if not data:
+        sio.disconnect(sid)
+        print(f"   {sid} invalid join attempt (no data provided)")
+        return
+
+    print(f" > client joining: sid={sid} data={data}")
+
+    # if valid room code was specified join already existing room
+    roomcode = ''
+
+    if 'room' in data and data['room'] in roomdict:
+            print(f" - {sid} joining existing room {data}")
+            roomcode = data['room']
+            room_user_add(roomcode, sid)
+            sio.emit("canvas_request_state", to=roomcode, skip_sid=sid)
+    
+    # if specified room code doesn't exist or none was specified, create and join a new room
+    else:
+        roomcode = room_create(sid)
+        print(f" - {sid} creating NEW room {data} CODE = {roomcode}")
+        room_user_add(roomcode, sid)
+        # client is in "loading" state until the canvas state is received, since the room is new and the client is alone, there's 
+        # nobody to receive canvas state from, so we send them an empty canvas to tell the client it's good to go
+        sio.emit("canvas_receive_state", data="NEW_ROOM_EMPTY_CANVAS", to=sid)
+        print(roomdict)
+    
+    # check if the room was successfuly created and then welcome the user
+    if roomcode in roomdict:
+        sio.emit("room_welcome", data=roomcode, to=sid)
+        chat_print(f'joining: {userdict[sid].name}', type=MSG_USERJOIN, to=roomcode)
+
+    
 
 # sent by clients as a response to canvas_request_state. forwards the state of the canvas to other clients in order to synchronize them
 @sio.event
 def canvas_state(sid, data):
-    sio.emit("canvas_receive_state", data)
+    roomcode:str = get_user_roomcode(sid)
+    if roomcode in roomdict:
+        sio.emit("canvas_receive_state", to=roomcode, data=data)
+
+
 
 # drawing
 @sio.event
 def draw_line(sid, data):
-    #print(sid, data)
-    sio.emit("draw_line", data=data, skip_sid=sid)
+    roomcode = get_user_roomcode(sid)
+    if roomcode != '':
+        sio.emit("draw_line", data=data, skip_sid=sid, to=roomcode)
 
-# process user commands (this includes chat messages, since that's technically a command as well)
+# process user chat commands (this includes chat messages)
 @sio.event
 def command(sid, data):
     print(sid, data)
