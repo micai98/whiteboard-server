@@ -44,7 +44,7 @@ def gen_room_code(min_length:int=4):
     return code
 
 # prints a message in specified users' chatboxes
-def chat_print(text:str, to=None , type:int=MSG_SYSINFO):
+def chat_print(text:str, to="" , type:int=MSG_SYSINFO):
     """prints a message in specified users' chatboxes"""
     msg = {
         "timestamp": timenow(),
@@ -61,17 +61,17 @@ def process_command(sid:str, text:str):
     cmd = args.pop(0)
     global clearvotes, usercount
 
-    if(cmd == "info"):
+    if cmd == "info":
         chat_print(f"Server version: {__version__} | Users online: {usercount}", to=sid)
         return 0
     
-    if(cmd == "say"):
+    if cmd == "say":
         content = " ".join(args)
         if len(content) > 0: 
             msg = {
                 "timestamp": timenow(),
                 "variant": MSG_USERMSG,
-                "user": sid,
+                "user": userdict[sid].name,
                 "content": content
             }
             sio.emit("msg_broadcast", msg)
@@ -79,27 +79,56 @@ def process_command(sid:str, text:str):
             print(f"> ignoring empty message attempt ({sid})")
         return 0
     
-    if(cmd == "clear"):
+    if cmd == "clear":
         clearvotes += 1
-        chat_print(f"{sid} voted to clear the canvas ({clearvotes}/{usercount})")
-        if(clearvotes >= usercount):
+        chat_print(f"{userdict[sid].name} voted to clear the canvas ({clearvotes}/{usercount})")
+        if clearvotes >= usercount:
             clearvotes = 0
             chat_print("Cleared the canvas")
             sio.emit("canvas_clear")
         return 0
     
     # all commands should return a value, if the code reached this point that means the user entered an invalid command
-    chat_print(f"Unknown command \"{cmd}\"", to=sid)
+    chat_print(f'Unknown command \"{cmd}\"', to=sid)
 
     return -1
         
+def validate_user(sid, auth):
+    try:
+        if auth:
+            if 'user_name' in auth:
+                if len(auth['user_name']) > 0:
+                    return True
+    except Exception:
+        pass
+    return False
 
 @sio.event
 def connect(sid, environ, auth):
     global usercount, clearvotes
     usercount += 1
     print('> connect: ', sid, " auth: ", auth)
-    chat_print(f"joining: {sid}", MSG_USERJOIN)
+
+    if validate_user(sid, auth):
+        userdict[sid] = User(auth['user_name'])
+        response = {
+            "accepted": True,
+            "message": "Accepted",
+            "username": userdict[sid].name
+        }
+        
+        sio.emit("connect_response", to=sid, data=response)
+        chat_print(f'joining: {userdict[sid].name}', type=MSG_USERJOIN)
+
+    else:
+        response = {
+            "accepted": False,
+            "message": "Validation failed",
+            "username": ""
+        }
+        sio.emit("connect_response", to=sid, data=response)
+        sio.disconnect(sid)
+        
 
 @sio.event
 def disconnect(sid):
@@ -107,7 +136,13 @@ def disconnect(sid):
     usercount -= 1
     clearvotes = 0
     print(f'> disconnect: (socket: {sid})')
-    chat_print(f"leaving: {sid}", MSG_USERLEAVE)
+
+    if sid in userdict:
+        print('removing associated userdict entry')
+        userdict.pop(sid)
+        chat_print(f"leaving: {userdict[sid].name}", type=MSG_USERLEAVE)
+    else:
+        print('user had no userdict entry')
 
 # test event
 @sio.event
