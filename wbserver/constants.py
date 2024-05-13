@@ -2,6 +2,8 @@ ROOMCODE_CHARS = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M
 ROOMCODE_LOOP_MAX = 10
 ROOMCODE_FAILSAFE = 0
 
+USER_NAMELEN_MIN = 1
+USER_NAMELEN_MAX = 24
 CMDPREFIX = "/"
 
 # ChatMsgVariant
