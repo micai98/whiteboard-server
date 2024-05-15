@@ -40,7 +40,7 @@ def gen_room_code(min_length:int=4):
     return code
 
 # prints a message in specified users' chatboxes
-def chat_print(text:str, to="" , type:int=MSG_SYSINFO):
+def chat_print(text:str, to:str , type:int=MSG_SYSINFO):
     """prints a message in specified users' chatboxes"""
     msg = {
         "timestamp": timenow(),
@@ -50,28 +50,36 @@ def chat_print(text:str, to="" , type:int=MSG_SYSINFO):
 
     sio.emit("msg_broadcast", data=msg, to=to)
 
+# used to print a notification whenever the room's host is changed
+def chat_announce_host(host_sid:str, to:str):
+    chat_print(f"{get_user(host_sid).name} is now the host", to=to, type=MSG_SYSWARNING)
+
 # processes string as a chat command, returns -1 if command doesn't exist. the prefix should be removed before being passed to this function
 def process_command(sid:str, text:str):
     """processes string as a chat command, returns -1 if command doesn't exist. the prefix should be removed before being passed to this function"""
     args = text.split(" ")
-    cmd = args.pop(0)
+    cmd = args.pop(0).lower() # make command names case insensitive
     user:User = get_user(sid)
+    room:Room = user.get_room_obj()
 
+    # sanity checks
     if not user:
         print(f" > INVALID USER ISSUED A COMMAND: {sid} {text}")
-        return
+        return -1
     
-    if not user.room in objects.rooms:
+    if not room:
         print(f" > USER IN INVALID ROOM ISSUED A COMMAND: {sid} {text}")
-        return
+        return -1
 
+    # - - COMMANDS
     if cmd == "info":
         chat_print(f"Server version: {__version__} | Users online: {usercount}", to=sid)
         return 0
     
     if cmd == "say":
         content = " ".join(args)
-        if len(content) > 0: 
+        content_len = len(content)
+        if content_len > 0 and content_len < MSG_LEN_MAX: 
             msg = {
                 "timestamp": timenow(),
                 "variant": MSG_USERMSG,
@@ -80,12 +88,11 @@ def process_command(sid:str, text:str):
             }
             sio.emit("msg_broadcast", msg, to=user.room)
         else:
-            print(f"> ignoring empty message attempt ({sid})")
+            chat_print(f"Message too long or empty (limit: {MSG_LEN_MAX})", to=sid, type=MSG_SYSERROR)
+            print(f"> ignoring empty/too long message attempt ({sid})")
         return 0
     
     if cmd == "list":
-        room:Room = objects.rooms[user.room]
-        i:int = 0
         chat_print(f"Users in room {user.room}:", to=sid)
         for uid in room.uids:
             user = room.get_user_by_uid(uid)
@@ -96,41 +103,81 @@ def process_command(sid:str, text:str):
         return 0
 
     if cmd == "clear":
-        room:Room = objects.rooms[user.room]
-
         votes = len(room.clearvotes)
         users = len(room.users)
 
         if sid in room.clearvotes:
             room.clearvotes.remove(sid)
-            chat_print(f"{user.name} cancelled vote to clear canvas")
+            chat_print(f"{user.name} cancelled vote to clear canvas", to=room.roomcode)
         else:
             votes += 1
             room.clearvotes.append(sid)
-            chat_print(f"{user.name} wants to clear the canvas ({votes}/{users})")
+            chat_print(f"{user.name} wants to clear the canvas ({votes}/{users})", to=room.roomcode)
         
             if votes >= users:
                 room.clearvotes.clear()
-                chat_print("Cleared the canvas")
+                chat_print("Cleared the canvas", to=room.roomcode, type=MSG_SYSWARNING)
                 sio.emit("canvas_clear", to=user.room)
 
         return 0
     
+    # - - ADMIN COMMANDS
     if cmd == "forceclear":
-        room:Room = objects.rooms[user.room]
         if sid != room.host: 
-            chat_print("You don't have permission to use this command", to=sid, type=MSG_SYSERROR)
+            chat_print(TEXT_NOPERMS, to=sid, type=MSG_SYSERROR)
             return 0
         
-        chat_print("Cleared the canvas (forced by host)")
+        chat_print("Cleared the canvas (forced by host)", to=room.roomcode, type=MSG_SYSWARNING)
         sio.emit("canvas_clear", to=room.roomcode)
         return 0
 
+    if cmd == "givehost":
+        if sid != room.host: 
+            chat_print(TEXT_NOPERMS, to=sid, type=MSG_SYSERROR)
+            return 0
+        
+        target:User = cmd_arg_to_user(sid, room, args)
+        if target:
+            room.host = target.sid
+            chat_announce_host(target.sid, room.roomcode)
+
+        return 0
+
+
+    if cmd == "kick":
+        if sid != room.host: 
+            chat_print(TEXT_NOPERMS, to=sid, type=MSG_SYSERROR)
+            return 0
+    
+        target:User = cmd_arg_to_user(sid, room, args)
+        if target:
+            chat_print(f"{target.name} has been kicked", to=room.roomcode, type=MSG_SYSWARNING)
+            sio.disconnect(target.sid)
+        
+        return 0
+        
+    # - -
+
     # all commands should return a value, if the code reached this point that means the user entered an invalid command
     chat_print(f'Unknown command \"{cmd}\"', to=sid)
-
     return -1
-        
+
+def cmd_arg_to_user(caller_sid:str, room:Room, args:list[str], pos:int=0, allowself:bool=False):
+    if len(args) < 1 or not args[pos].isdigit():
+        chat_print(TEXT_NOARGS, to=caller_sid, type=MSG_SYSERROR)
+        return None
+    
+    target:User = room.get_user_by_uid(int(args[pos]))
+    if target:
+        if target.sid == caller_sid and allowself == False:
+            chat_print(TEXT_NOSELFTARGET, to=caller_sid, type=MSG_SYSERROR)
+            return None
+        else:
+            return target
+
+    chat_print(TEXT_NOTARGET, to=caller_sid, type=MSG_SYSERROR)
+    return None
+
 def validate_user(sid, auth):
     try:
         if auth:
@@ -183,7 +230,13 @@ def disconnect(sid):
         if roomcode in objects.rooms:
             print('  removing user from room')
             chat_print(f"leaving: {user.name}", type=MSG_USERLEAVE, to=roomcode)
-            get_room(roomcode).user_remove(sid)
+            room:Room = get_room(roomcode)
+            room.user_remove(sid)
+            if roomcode in objects.rooms: #check if room didn't get auto-deleted after the user left
+                if room.host == sid: # if the user who left was the host, choose a new one
+                    room.host = random.choice(room.users)
+                    print(f' + ROOM {roomcode} changed host to: ')
+                    chat_announce_host(room.host, roomcode)
 
         print('   removing associated objects.users entry')
         user.delete()
