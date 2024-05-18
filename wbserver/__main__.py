@@ -315,6 +315,15 @@ def user_move(sid, data):
         uid = get_room(roomcode).get_uid(sid)
         sio.emit("user_move", data=[uid, data[0], data[1]], skip_sid=sid, to=roomcode)
 
+@sio.event
+def user_width(sid, data):
+    if not data: return
+    roomcode:str = get_user(sid).room
+    if roomcode != '':
+        uid = get_room(roomcode).get_uid(sid)
+        sio.emit("user_width", data=[uid, data], to=roomcode)
+
+
 # process user chat commands (this includes chat messages)
 @sio.event
 def command(sid, data):
