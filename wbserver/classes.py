@@ -114,6 +114,7 @@ class Room:
         return {
             "host": self.get_uid(self.host),
             "users": uiddict,
+            "usercount": len(uiddict)
         }
 
 def get_room(roomcode:str) -> Room:

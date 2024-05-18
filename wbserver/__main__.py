@@ -140,6 +140,7 @@ def process_command(sid:str, text:str):
         if target:
             room.host = target.sid
             chat_announce_host(target.sid, room.roomcode)
+            sio.emit("room_update", to=room.roomcode, data=room.gen_update_data())
 
         return 0
 
@@ -233,6 +234,7 @@ def disconnect(sid):
             room:Room = get_room(roomcode)
             room.user_remove(sid)
             if roomcode in objects.rooms: #check if room didn't get auto-deleted after the user left
+                sio.emit("room_update", to=roomcode, data=room.gen_update_data())
                 if room.host == sid: # if the user who left was the host, choose a new one
                     room.host = random.choice(room.users)
                     print(f' + ROOM {roomcode} changed host to: ')
@@ -264,7 +266,9 @@ def client_join(sid, data):
         roomcode = data['room']
         room = get_room(roomcode)
         room.user_add(sid)
-        sio.emit("canvas_request_state", to=roomcode, skip_sid=sid)
+        # the server doesn't store canvases
+        # instead it asks the host for the canvas state whenever a new user joins
+        sio.emit("canvas_request_state", to=room.host, skip_sid=sid) 
     
     # if specified room code doesn't exist or none was specified, create and join a new room
     else:
@@ -281,7 +285,7 @@ def client_join(sid, data):
     # check if the room was successfuly created and then welcome the user
     if roomcode in objects.rooms:
         sio.enter_room(sid, roomcode)
-        sio.emit("room_welcome", to=sid, data=roomcode)
+        sio.emit("room_welcome", to=sid, data=room.gen_welcome_data(sid))
         sio.emit("room_update", to=roomcode, data=room.gen_update_data())
         chat_print(f'joining: {get_user(sid).name}', type=MSG_USERJOIN, to=roomcode)
     else:
@@ -296,11 +300,20 @@ def canvas_state(sid, data):
         sio.emit("canvas_receive_state", to=roomcode, data=data)
 
 # drawing
-@sio.event
-def draw_line(sid, data):
+@sio.event 
+def user_draw(sid, data):
+    if not data: return
     roomcode:str = get_user(sid).room
     if roomcode != '':
-        sio.emit("draw_line", data=data, skip_sid=sid, to=roomcode)
+        sio.emit("user_draw", data=data, skip_sid=sid, to=roomcode)
+
+@sio.event
+def user_move(sid, data):
+    if not data: return
+    roomcode:str = get_user(sid).room
+    if roomcode != '':
+        uid = get_room(roomcode).get_uid(sid)
+        sio.emit("user_move", data=[uid, data[0], data[1]], skip_sid=sid, to=roomcode)
 
 # process user chat commands (this includes chat messages)
 @sio.event
