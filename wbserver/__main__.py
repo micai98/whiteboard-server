@@ -6,23 +6,25 @@ whiteboard websocket server
 """
 
 __author__ = "micai"
-__version__ = "0.3"
+__version__ = "0.4"
 
 import random
-import time
+import sys
 
 import eventlet
 import socketio
+from engineio.payload import Payload
 
 from . import objects
 from .utils import *
 from .constants import *
 from .classes import *
 
-sv_host = ''
-sv_port = 3001
-sv_cors = ['http://localhost:3000']
+sv_host = sys.argv[1]
+sv_port = int(sys.argv[2])
+sv_cors = [sys.argv[3]]
 
+Payload.max_decode_packets = 32
 sio = socketio.Server(cors_allowed_origins=sv_cors)
 app = socketio.WSGIApp(sio, static_files={
     '/': {'content_type': 'text/html', 'filename': 'index.html'}
@@ -184,7 +186,7 @@ def validate_user(sid, auth):
         if auth:
             if 'user_name' in auth:
                 namelen = len(auth['user_name'])
-                if namelen >= USER_NAMELEN_MIN and namelen <= USER_NAMELEN_MAX:
+                if namelen >= USER_NAMELEN_MIN and not namelen > USER_NAMELEN_MAX:
                     return True
     except Exception as e:
         print(" > EXCEPTION WHILE VALIDATING USER")
