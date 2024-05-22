@@ -130,6 +130,7 @@ def process_command(sid:str, text:str):
             return 0
         
         chat_print("Cleared the canvas (forced by host)", to=room.roomcode, type=MSG_SYSWARNING)
+        room.clearvotes.clear()
         sio.emit("canvas_clear", to=room.roomcode)
         return 0
 
